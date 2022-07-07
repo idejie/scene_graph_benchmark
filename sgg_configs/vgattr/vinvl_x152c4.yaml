@@ -1,6 +1,6 @@
 MODEL:
     META_ARCHITECTURE: "AttrRCNN"
-    WEIGHT: "pretrained_model/gqa/gqa_X152C4_vrdvgvrd_lr0.003_bsz8_objscore005_nooverlap/model_0080000.pth"
+    WEIGHT: "pretrained_model/vinvl_vg_x152c4.pth"
     BACKBONE:
       CONV_BODY: "R-152-C4"
     RESNETS:
@@ -14,9 +14,10 @@ MODEL:
     ROI_HEADS:
       BATCH_SIZE_PER_IMAGE: 384 # 512
       POSITIVE_FRACTION: 0.5 # 0.25
-      SCORE_THRESH: 0.2 # 0.0001
+      SCORE_THRESH: 0.0 # 0.0001
       DETECTIONS_PER_IMG: 100 # 600
       MIN_DETECTIONS_PER_IMG: 10
+      NMS_FILTER: 1
     ROI_BOX_HEAD:
       NUM_CLASSES: 1595
     ROI_ATTRIBUTE_HEAD:
@@ -48,9 +49,12 @@ TEST:
     IMS_PER_BATCH: 1
     SKIP_PERFORMANCE_EVAL: True
     SAVE_PREDICTIONS: True
+    OUTPUT_RELATION_FEATURE: True
+    OUTPUT_FEATURE: True
     SAVE_RESULTS_TO_TSV: True
-    TSV_SAVE_SUBSET: ['rect', 'class', 'conf', 'feature']
+    TSV_SAVE_SUBSET: ['rect', 'class', 'conf', 'feature', 'relation_feature']
     GATHER_ON_CPU: True
+    IGNORE_BOX_REGRESSION: False
 OUTPUT_DIR: "./output/X152C5_test"
 DATA_DIR: "./datasets"
 DISTRIBUTED_BACKEND: 'gloo'

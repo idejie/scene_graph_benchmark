@@ -1,10 +1,21 @@
 # Copyright (c) 2021 Microsoft Corporation. Licensed under the MIT license. 
-
+from PIL import Image
 import cv2
 import os.path as op
 import argparse
 import json
+import sys
+import os
+import numpy as np
+import torch
+import os
+import uuid
+import io
+# os.environ['LMDB_FORCE_CFFI'] = '1'
+import lmdb
+# env = lmdb.open('/home/yangdj/data/ego4d_data/det_lmdb', map_size=3099511627776)
 
+from torch.utils.data import Dataset,DataLoader
 from scene_graph_benchmark.scene_parser import SceneParser
 from scene_graph_benchmark.AttrRCNN import AttrRCNN
 from maskrcnn_benchmark.data.transforms import build_transforms
@@ -15,9 +26,16 @@ from maskrcnn_benchmark.data.datasets.utils.load_files import \
     config_dataset_file
 from maskrcnn_benchmark.data.datasets.utils.load_files import load_labelmap_file
 from maskrcnn_benchmark.utils.miscellaneous import mkdir
-
+from tqdm import tqdm
 from tools.demo.detect_utils import detect_objects_on_single_image
 from tools.demo.visual_utils import draw_bb, draw_rel
+
+def cv2Img_to_Image(input_img):
+    # try:
+    # cv2_img = input_img.copy()
+    # img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
+    img = Image.fromarray(input_img)
+    return img
 
 
 def postprocess_attr(dataset_attr_labelmap, label_list, conf_list):
@@ -47,23 +65,59 @@ def postprocess_attr(dataset_attr_labelmap, label_list, conf_list):
     else:
         return [[], []]
 
+prefix = '/home/yangdj/data/ego4d_data/'
+class Ego4d(Dataset):
+    def __init__(self,part,index, r=False):
+        super(Ego4d).__init__()
+        files = open('/home/dejie/projects/scene_graph_benchmark/all_imgs.list').readlines()
+        l = len(files)
+        s = 0 if index==0 else l//part*index
+    
+        todo_frames = [l.strip() for l in files]
+        
+        self.todo_list = todo_frames[s:] if index== -1 or (index+1) >=part else todo_frames[s:l//part*(index+1)]
+        if r:
+           self. todo_list.reverse()
+        self.transforms = build_transforms(cfg, is_train=False)
+    def __len__(self):
+        return len(self.todo_list)
+    def __getitem__(self, index):
+        img_file = self.todo_list[index].strip()
+        json_save_file = 'results3/'+str(uuid.uuid1()) + '.json'
+        pt_save_file = json_save_file.replace('.json','.pt')
+        if (os.path.exists(json_save_file) and os.path.exists(pt_save_file)):
 
+            return None, None, None
+
+        if not os.path.exists(img_file):
+            print('error:',img_file)
+            return None, None, None
+        cv2_img = cv2.imread(img_file)
+        cv2_img = cv2Img_to_Image(cv2_img)
+        cv2_img_t, _ = self.transforms(cv2_img, target=None)
+        return cv2_img_t,np.array(cv2_img.size),(json_save_file,pt_save_file)
+        
+def collect(batch):
+    # print(batch)
+    imgs = []
+    sizes = []
+    all_files = []
+    for img,size,files in batch:
+        if img is None:
+            continue
+        imgs.append(img)
+        sizes.append(size)
+        all_files.append(files)
+    return imgs, sizes, all_files
 def main():
     parser = argparse.ArgumentParser(description="Object Detection Demo")
-    parser.add_argument("--config_file", metavar="FILE",
+    parser.add_argument("--config_file", metavar="FILE",default='sgg_configs/vgattr/vinvl_x152c4.yaml',
                         help="path to config file")
-    parser.add_argument("--img_file", metavar="FILE", help="image path")
-    parser.add_argument("--labelmap_file", metavar="FILE",
-                        help="labelmap file to select classes for visualizatioin")
-    parser.add_argument("--save_file", required=False, type=str, default=None,
-                        help="filename to save the proceed image")
-    parser.add_argument("--visualize_attr", action="store_true",
-                        help="visualize the object attributes")
-    parser.add_argument("--visualize_relation", action="store_true",
-                        help="visualize the relationships")
     parser.add_argument("opts", default=None, nargs=argparse.REMAINDER,
                         help="Modify config options using the command-line")
-
+    parser.add_argument('--bz',default=6,type=int)
+    parser.add_argument('--ratio')
+    parser.add_argument('--reverse',action='store_true')
     args = parser.parse_args()
     cfg.set_new_allowed(True)
     cfg.merge_from_other_cfg(sg_cfg)
@@ -72,20 +126,16 @@ def main():
     cfg.merge_from_list(args.opts)
     cfg.freeze()
 
-    assert op.isfile(args.img_file), \
-        "Image: {} does not exist".format(args.img_file)
-
-    output_dir = cfg.OUTPUT_DIR
-    mkdir(output_dir)
-
     if cfg.MODEL.META_ARCHITECTURE == "SceneParser":
         model = SceneParser(cfg)
     elif cfg.MODEL.META_ARCHITECTURE == "AttrRCNN":
         model = AttrRCNN(cfg)
+    
     model.to(cfg.MODEL.DEVICE)
+    # model = model.half()
     model.eval()
 
-    checkpointer = DetectronCheckpointer(cfg, model, save_dir=output_dir)
+    checkpointer = DetectronCheckpointer(cfg, model, save_dir='')
     checkpointer.load(cfg.MODEL.WEIGHT)
 
     # dataset labelmap is used to convert the prediction to class labels
@@ -96,82 +146,66 @@ def main():
     dataset_labelmap = {int(val): key
                         for key, val in dataset_allmap['label_to_idx'].items()}
     # visual_labelmap is used to select classes for visualization
-    try:
-        visual_labelmap = load_labelmap_file(args.labelmap_file)
-    except:
-        visual_labelmap = None
+    # try:
+    #     visual_labelmap = load_labelmap_file(args.labelmap_file)
+    # except:
+    #     visual_labelmap = None
 
-    if cfg.MODEL.ATTRIBUTE_ON and args.visualize_attr:
-        dataset_attr_labelmap = {
-            int(val): key for key, val in
-            dataset_allmap['attribute_to_idx'].items()}
+    # if cfg.MODEL.ATTRIBUTE_ON:
+    #     dataset_attr_labelmap = {
+    #         int(val): key for key, val in
+    #         dataset_allmap['attribute_to_idx'].items()}
     
-    if cfg.MODEL.RELATION_ON and args.visualize_relation:
-        dataset_relation_labelmap = {
-            int(val): key for key, val in
-            dataset_allmap['predicate_to_idx'].items()}
+    
+    
+    part, index = [int(r) for r in args.ratio.split(':')]
+    
+    # in_dir = '/home/yangdj/projects/notebooks/'
+    # out_dir = '/home/yangdj/data/ego4d_data/vinvl'
+    # files = open('/home/yangdj/frames_fps6.list').readlines()
+    # l = len(files)
+    # s = 0 if index==0 else l//part*index
+    
+    # todo_frames = [l.strip() for l in files]
+    # todo_list = todo_frames[s:] if index== -1 or (index+1) >=part else todo_frames[s:l//part*(index+1)]
+    r = False
+    if args.reverse:
+        r=True
+    dest = Ego4d(part,index)
+    
+    bz = args.bz
+    # dataloader = DataLoader(dest, batch_size=bz, num_workers=8)
 
-    transforms = build_transforms(cfg, is_train=False)
-    cv2_img = cv2.imread(args.img_file)
-    dets = detect_objects_on_single_image(model, transforms, cv2_img)
-
-    if isinstance(model, SceneParser):
-        rel_dets = dets['relations']
-        dets = dets['objects']
-
-    for obj in dets:
-        obj["class"] = dataset_labelmap[obj["class"]]
-    if visual_labelmap is not None:
-        dets = [d for d in dets if d['class'] in visual_labelmap]
-    if cfg.MODEL.ATTRIBUTE_ON and args.visualize_attr:
-        for obj in dets:
-            obj["attr"], obj["attr_conf"] = postprocess_attr(dataset_attr_labelmap, obj["attr"], obj["attr_conf"])
-    if cfg.MODEL.RELATION_ON and args.visualize_relation:
-        for rel in rel_dets:
-            rel['class'] = dataset_relation_labelmap[rel['class']]
-            subj_rect = dets[rel['subj_id']]['rect']
-            rel['subj_center'] = [(subj_rect[0]+subj_rect[2])/2, (subj_rect[1]+subj_rect[3])/2]
-            obj_rect = dets[rel['obj_id']]['rect']
-            rel['obj_center'] = [(obj_rect[0]+obj_rect[2])/2, (obj_rect[1]+obj_rect[3])/2]
-
-
-    rects = [d["rect"] for d in dets]
-    scores = [d["conf"] for d in dets]
-    if cfg.MODEL.ATTRIBUTE_ON and args.visualize_attr:
-        attr_labels = [','.join(d["attr"]) for d in dets]
-        attr_scores = [d["attr_conf"] for d in dets]
-        labels = [attr_label+' '+d["class"]
-                  for d, attr_label in zip(dets, attr_labels)]
-    else:
-        labels = [d["class"] for d in dets]
-
-    draw_bb(cv2_img, rects, labels, scores)
-
-    if cfg.MODEL.RELATION_ON and args.visualize_relation:
-        rel_subj_centers = [r['subj_center'] for r in rel_dets]
-        rel_obj_centers = [r['obj_center'] for r in rel_dets]
-        rel_scores = [r['conf'] for r in rel_dets]
-        rel_labels = [r['class'] for r in rel_dets]
-        draw_rel(cv2_img, rel_subj_centers, rel_obj_centers, rel_labels, rel_scores)
-
-    if not args.save_file:
-        save_file = op.splitext(args.img_file)[0] + ".detect.jpg"
-    else:
-        save_file = args.save_file
-    cv2.imwrite(save_file, cv2_img)
-    print("save results to: {}".format(save_file))
-
-    # save results in text
-    if cfg.MODEL.ATTRIBUTE_ON and args.visualize_attr:
-        result_str = ""
-        for label, score, attr_score in zip(labels, scores, attr_scores):
-            result_str += label+'\n'
-            result_str += ','.join([str(conf) for conf in attr_score])
-            result_str += '\t'+str(score)+'\n'
-        text_save_file = op.splitext(save_file)[0] + '.txt'
-        with open(text_save_file, "w") as fid:
-            fid.write(result_str)
+    loader = DataLoader(dest, batch_size=bz, num_workers=8, collate_fn=collect)
+    for cv2_imgs, sizes,real_files in tqdm(loader):
+        # print(cv2_imgs.shape)
+        # print(sizes)
+        # print(real_files)
+        # print(len(real_files))
+        
+        if len(real_files)==0:
+            continue
+        # imgs =[]
+        results = detect_objects_on_single_image(model, cv2_imgs,sizes)
+        # box_features, dets
+        # print(len(results))
+        assert len(real_files)==len(results)
+        for (json_save_file, pt_save_file),(box_features, dets) in zip(real_files,results):
+            # for obj in dets:
+            #     obj["class"] = dataset_labelmap[obj["class"]]
+            result = {}
+            result['labels'] = [d["class"]for d in dets]
+            result['rects']= [d["rect"] for d in dets]
+            result['scores'] = [d["conf"] for d in dets]
+            result['scores_all'] = [d["score_all"] for d in dets]
+            result['attr_labels'] = [d["attr"] for d in dets]
+            result['attr_scores'] = [d["attr_conf"] for d in dets]
+            with open(json_save_file, "w") as fid:
+                json.dump(result,fid)
+            torch.save(box_features,pt_save_file)
 
 
 if __name__ == "__main__":
     main()
+
+# CUDA_VISIBLE_DEVICES=4 python tools/demo/demo_image.py --ratio 10:4 --bz 10

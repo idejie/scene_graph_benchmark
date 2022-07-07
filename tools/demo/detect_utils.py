@@ -2,6 +2,7 @@
 import cv2
 import torch
 from PIL import Image
+# from torch.cuda.amp import autocast as autocast
 
 from scene_graph_benchmark.scene_parser import SceneParser
 from scene_graph_benchmark.AttrRCNN import AttrRCNN
@@ -14,69 +15,50 @@ def cv2Img_to_Image(input_img):
     return img
 
 
-def detect_objects_on_single_image(model, transforms, cv2_img):
+def detect_objects_on_single_image(model, cv2_imgs,sizes):
     # cv2_img is the original input, so we can get the height and 
     # width information to scale the output boxes.
-    img_input = cv2Img_to_Image(cv2_img)
-    img_input, _ = transforms(img_input, target=None)
-    img_input = img_input.to(model.device)
+    # if isinstance(cv2_imgs, list):
+    #     img_input = []
+    #     for cv2_img in cv2_imgs:
+    #         cv2_img = cv2Img_to_Image(cv2_img)
+    #         cv2_img, _ = transforms(cv2_img, target=None)
+    #         cv2_img = cv2_img.to(model.device)
+    #         img_input.append(cv2_img)   
+    # else:
+    #     cv2_img = cv2_imgs
+    #     img_input = cv2Img_to_Image(cv2_imgs)
+    #     img_input, _ = transforms(img_input, target=None)
+    #     img_input = img_input.to(model.device)
 
     with torch.no_grad():
-        prediction = model(img_input)
-        prediction = prediction[0].to(torch.device("cpu"))
+        # ys = model(cv2_imgs)
+       
+        ys = model(cv2_imgs)
+        preds = []
+        for p in ys:
+            preds.append(p.to(torch.device("cpu")))
+    assert  len(preds)==len(sizes)
+    results = []
+    for prediction,(img_width, img_height) in zip(preds,sizes):
+        prediction = prediction.resize((img_width, img_height))
+        boxes = prediction.bbox.tolist()
 
-    img_height = cv2_img.shape[0]
-    img_width = cv2_img.shape[1]
-
-    if isinstance(model, SceneParser):
-        prediction_pred = prediction.prediction_pairs
-        relations = prediction_pred.get_field("idx_pairs").tolist()
-        relation_scores = prediction_pred.get_field("scores").tolist()
-        predicates = prediction_pred.get_field("labels").tolist()
-        prediction = prediction.predictions
-
-    prediction = prediction.resize((img_width, img_height))
-    boxes = prediction.bbox.tolist()
-    classes = prediction.get_field("labels").tolist()
-    scores = prediction.get_field("scores").tolist()
-
-    if isinstance(model, SceneParser):
-        rt_box_list = []
-        if 'attr_scores' in prediction.extra_fields:
-            attr_scores = prediction.get_field("attr_scores")
-            attr_labels = prediction.get_field("attr_labels")
-            rt_box_list = [
-                {"rect": box, "class": cls, "conf": score,
-                "attr": attr[attr_conf > 0.01].tolist(),
-                "attr_conf": attr_conf[attr_conf > 0.01].tolist()}
-                for box, cls, score, attr, attr_conf in
-                zip(boxes, classes, scores, attr_labels, attr_scores)
-            ]
-        else:
-            rt_box_list = [
-                {"rect": box, "class": cls, "conf": score}
-                for box, cls, score in
-                zip(boxes, classes, scores)
-            ]
-        rt_relation_list = [{"subj_id": relation[0], "obj_id":relation[1], "class": predicate+1, "conf": score}
-                for relation, predicate, score in
-                zip(relations, predicates, relation_scores)]
-        return {'objects': rt_box_list, 'relations':rt_relation_list}
-    else:
-        if 'attr_scores' in prediction.extra_fields:
-            attr_scores = prediction.get_field("attr_scores")
-            attr_labels = prediction.get_field("attr_labels")
-            return [
-                {"rect": box, "class": cls, "conf": score,
-                "attr": attr[attr_conf > 0.01].tolist(),
-                "attr_conf": attr_conf[attr_conf > 0.01].tolist()}
-                for box, cls, score, attr, attr_conf in
-                zip(boxes, classes, scores, attr_labels, attr_scores)
-            ]
-
-        return [
-            {"rect": box, "class": cls, "conf": score}
-            for box, cls, score in
-            zip(boxes, classes, scores)
-        ]
-
+        classes = prediction.get_field("labels").tolist()
+        scores = prediction.get_field("scores").tolist()
+        scores_all = prediction.get_field("scores_all").tolist()
+        box_features = prediction.get_field("box_features")
+        attr_scores = prediction.get_field("attr_scores")
+        attr_labels = prediction.get_field("attr_labels")
+        results.append((box_features, [
+            {"rect": box, 
+            "class": cls, 
+            "conf": score,
+            'score_all':score_all,
+            "attr": attr.tolist(),
+            "attr_conf": attr_conf.tolist()}
+            for box, cls, score, score_all, attr, attr_conf in
+            zip(boxes, classes, scores, scores_all, attr_labels, attr_scores)
+        ])
+        )
+    return results
