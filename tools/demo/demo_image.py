@@ -200,9 +200,9 @@ def main():
             result['scores_all'] = [d["score_all"] for d in dets]
             result['attr_labels'] = [d["attr"] for d in dets]
             result['attr_scores'] = [d["attr_conf"] for d in dets]
-            with open(json_save_file, "w") as fid:
-                json.dump(result,fid)
-            torch.save(box_features,pt_save_file)
+            # with open(json_save_file, "w") as fid:
+            #     json.dump(result,fid)
+            # torch.save(box_features,pt_save_file)
 
 
 if __name__ == "__main__":
