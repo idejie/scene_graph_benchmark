@@ -43,3 +43,4 @@ run_philly.py
 vrd_philly_tools_submit.yaml
 results3
 *_lmdb
+all_imgs.list
